@@ -1,0 +1,103 @@
+name: Tulipa Lovers v0.5 - Fix Product Save, Email Login APK and Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tulipa_lovers_source_v05.zip'
+      - '.github/workflows/build_tulipa_from_zip_v05.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: Build Android debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout source archive
+        uses: actions/checkout@v4
+      - name: Configure Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Install Android platform
+        run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+      - name: Setup Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Unzip Tulipa Lovers project
+        run: |
+          test -s tulipa_lovers_source_v05.zip
+          mkdir -p app_source
+          unzip -q tulipa_lovers_source_v05.zip -d app_source
+          test -f app_source/android/app/build.gradle.kts
+          test -f app_source/site/index.html
+          test -f app_source/supabase/01_init.sql
+      - name: Test storefront source
+        run: |
+          cd app_source
+          python3 tests/static-check.py
+          node --check site/app.js
+          node --check site/api.js
+          node tests/smoke.mjs
+          node tests/auth.mjs
+          node tests/product-save.mjs
+      - name: Assemble debug APK
+        run: |
+          gradle -p app_source/android :app:assembleDebug --no-daemon \
+            "-PtulipaWebUrl=https://hisham912-2026.github.io/Tulipa-Lovers-/"
+          test -s app_source/android/app/build/outputs/apk/debug/app-debug.apk
+          cd app_source/android/app/build/outputs/apk/debug
+          sha256sum app-debug.apk > app-debug.apk.sha256
+      - name: Upload test APK and SHA-256
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tulipa-Lovers-debug-APK-v0.5
+          path: |
+            app_source/android/app/build/outputs/apk/debug/app-debug.apk
+            app_source/android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy-storefront:
+    name: Deploy storefront to GitHub Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout source archive
+        uses: actions/checkout@v4
+      - name: Unzip Tulipa Lovers project
+        run: |
+          test -s tulipa_lovers_source_v05.zip
+          mkdir -p app_source
+          unzip -q tulipa_lovers_source_v05.zip -d app_source
+          test -f app_source/site/index.html
+      - name: Configure public Supabase connection (optional)
+        working-directory: app_source
+        env:
+          TULIPA_SUPABASE_URL: ${{ vars.TULIPA_SUPABASE_URL }}
+          TULIPA_SUPABASE_PUBLISHABLE_KEY: ${{ vars.TULIPA_SUPABASE_PUBLISHABLE_KEY }}
+        run: python3 tool/configure_site.py
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload storefront artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: app_source/site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
